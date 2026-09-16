@@ -9,8 +9,17 @@ from pathlib import Path
 from typing import NamedTuple
 
 import psycopg
+import truststore
 from dotenv import load_dotenv
 import os
+
+# Delegate TLS certificate verification to the OS's native trust store
+# (Windows: SChannel) instead of OpenSSL's own bundled one. Needed on
+# networks with TLS-inspecting proxies whose certificates the OS/browser
+# already trusts but Python's default ssl context does not. This is NOT
+# the same as disabling verification — verification still happens, just
+# against the same trust anchors the OS itself uses.
+truststore.inject_into_ssl()
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -54,7 +63,9 @@ def calls_made_today(cur: psycopg.Cursor) -> int:
         "SELECT COUNT(*) FROM api_calls "
         "WHERE success AND called_at::date = (now() AT TIME ZONE 'UTC')::date"
     )
-    return cur.fetchone()[0]
+    row = cur.fetchone()
+    assert row is not None, "COUNT(*) always returns exactly one row"
+    return row[0]
 
 
 def fetch_daily_prices(ticker: str, api_key: str) -> dict:
@@ -158,7 +169,7 @@ def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = Non
             validation = validate_call(raw)
             record_call(cur, ticker, validation.is_valid, validation.error)
 
-            if not validation.is_valid:
+            if validation.result is None:
                 logger.error(
                     "API call for %s did not return price data (quota/format issue): %s",
                     ticker, validation.error,
