@@ -17,16 +17,16 @@ call itself:
 - **Idempotency**: running the collector multiple times for the same
   day never creates duplicates or an inconsistent state.
 - **Fault tolerance**: a network hiccup, an invalid API key, or a
-  quota breach is caught, logged, and handled explicitly it never
+  quota breach is caught, logged, and handled explicitly. It never
   fails silently or crashes the process unexpectedly.
 - **Observability**: every run, successful or not, is logged clearly
   enough to reconstruct after the fact what happened.
 
-A full design doc: architecture rationale, the alternatives that
-were considered and rejected, and the key design decisions in detail
-lives in [`docs/design-doc.md`](docs/design-doc.md). This README
-covers what the project does and how to run it and the design doc covers
-why it's built this way.
+A full design doc lives in [`docs/design-doc.md`](docs/design-doc.md):
+architecture rationale, the alternatives that were considered and
+rejected, and the key design decisions in detail. This README covers
+what the project does and how to run it. The design doc covers why
+it's built this way.
 
 ## Architecture
 
@@ -118,18 +118,38 @@ logic means the row count for that ticker won't change, only the
 
 ## Testing
 
-Two API response fixtures live under `tests/fixtures/`, captured from
-real Alpha Vantage responses:
+An automated `pytest` suite covers the collector's core logic. The
+database and the network are mocked out, so the suite runs without a
+real PostgreSQL instance or a live API call.
+
+Run it with:
+
+```bash
+pytest -v
+```
+
+The suite covers:
+
+- Success/failure classification of an API response (`validate_call`).
+- Recording both successful and failed calls (`record_call`).
+- Building the upsert rows and row count from a raw API response
+  (`write_api_data`).
+- Reading today's successful call count (`calls_made_today`).
+- The daily rate-limit skip, and the normal write path, in the
+  orchestration function (`collect`).
+- The network client's retry-with-backoff behavior, and the failure
+  after exhausting retries (`fetch_daily_prices`).
+
+Two real Alpha Vantage API response fixtures, under `tests/fixtures/`,
+back several of these tests:
 
 - `daily_series_success.json` — a successful `TIME_SERIES_DAILY`
   response.
 - `invalid_api_key.json` — the error response Alpha Vantage returns
-  for an invalid key, used to exercise the failure path in
-  `validate_call` without needing a live, broken request.
+  for an invalid key.
 
-An automated `pytest` suite built on these fixtures is planned as a
-next step; until then, the behaviors below have been verified
-manually against a real PostgreSQL database:
+The following end-to-end behaviors have additionally been verified
+manually, against a real PostgreSQL database:
 
 - A successful run upserts the expected row count and logs it.
 - Re-running the same fixture a second time leaves the row count
@@ -149,11 +169,13 @@ Daily API-based data collector/
 ├── src/
 │   └── API_call.py                # client, validation, upsert, orchestration
 ├── tests/
+│   ├── test_API_call.py           # pytest suite
 │   └── fixtures/
 │       ├── daily_series_success.json
 │       └── invalid_api_key.json
 ├── .env.example
 ├── .gitignore
+├── pytest.ini
 ├── requirements.txt
 └── README.md
 ```
