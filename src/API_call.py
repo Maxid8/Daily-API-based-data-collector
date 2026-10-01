@@ -1,3 +1,4 @@
+import os
 import argparse
 import json
 import logging
@@ -7,11 +8,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
+import datetime as dt
 
 import psycopg
 import truststore
 from dotenv import load_dotenv
-import os
+
+from s3_writer import upload_raw_to_s3
 
 # Delegate TLS certificate verification to the OS's native trust store
 # (Windows: SChannel) instead of OpenSSL's own bundled one. Needed on
@@ -23,7 +26,7 @@ truststore.inject_into_ssl()
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-REQUIRED_ENV_VARS = ["API_KEY", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DB_NAME"]
+REQUIRED_ENV_VARS = ["API_KEY", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DB_NAME", "S3_BUCKET_NAME"]
 DAILY_CALL_LIMIT = 25
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 
@@ -149,6 +152,8 @@ def write_api_data(cur: psycopg.Cursor, ticker: str, price_data: dict) -> int:
 def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = None) -> None:
     """One parameterized entry point (design doc 4.5), so a future scheduler
     (cron / Airflow, project 6) can call this unchanged."""
+    today = dt.datetime.now(dt.timezone.utc).date()
+
     with get_connection(config) as conn:
         with conn.cursor() as cur:
             calls_today = calls_made_today(cur)
@@ -181,6 +186,16 @@ def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = Non
             conn.commit()
             logger.info("Upserted %d rows for %s.", rows_written, ticker)
 
+            if fixture_path is None:
+                upload_raw_to_s3(
+                    bucket_name=config["S3_BUCKET_NAME"],
+                    ticker=ticker,
+                    today=today,
+                    raw_json_data=validation.result
+                )
+            else:
+                logger.info("No data was uploaded to S3 because --fixture was used.")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Daily API-based data collector (Alpha Vantage).")
@@ -189,8 +204,9 @@ def parse_args() -> argparse.Namespace:
         "--fixture",
         type=Path,
         default=None,
-        help="Path to a saved API response JSON, used instead of a live call "
-        "(development/testing without burning API quota).",
+        help="Path to a saved API response JSON, used instead of a live call. "
+        "When used, no raw data is saved to S3. "
+        "(development/testing without burning API quota)",
     )
     return parser.parse_args()
 

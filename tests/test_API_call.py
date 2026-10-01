@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.API_call import (
+from API_call import (
     calls_made_today,
     collect,
     fetch_daily_prices,
@@ -111,7 +111,7 @@ def test_calls_made_today():
 
 
 def test_collect_skips_when_daily_limit_reached():
-    with patch("src.API_call.get_connection") as mock_get_connection:
+    with patch("API_call.get_connection") as mock_get_connection:
         mock_cur = (
             mock_get_connection.return_value
             .__enter__.return_value
@@ -127,7 +127,7 @@ def test_collect_skips_when_daily_limit_reached():
 
 
 def test_collect_proceeds_and_writes_data_when_under_daily_limit():
-    with patch("src.API_call.get_connection") as mock_get_connection:
+    with patch("API_call.get_connection") as mock_get_connection:
         mock_cur = (
             mock_get_connection.return_value
             .__enter__.return_value
@@ -168,8 +168,8 @@ def test_fetch_daily_prices_retries_after_network_error_then_succeeds():
 
         result = fetch_daily_prices("IBM", "dummy_key")
 
-        assert result == {"Time Series (Daily)": {}}
-        assert mock_urlopen.call_count == 2
+    assert result == {"Time Series (Daily)": {}}
+    assert mock_urlopen.call_count == 2
 
 
 def test_fetch_daily_prices_raises_after_exhausting_retries():
@@ -179,4 +179,4 @@ def test_fetch_daily_prices_raises_after_exhausting_retries():
         with pytest.raises(RuntimeError):
             fetch_daily_prices("IBM", "dummy_key")
 
-        assert mock_urlopen.call_count == 3
+    assert mock_urlopen.call_count == 3
