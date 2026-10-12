@@ -1,4 +1,5 @@
 import os
+import ssl
 import argparse
 import json
 import logging
@@ -15,14 +16,6 @@ import truststore
 from dotenv import load_dotenv
 
 from s3_writer import upload_raw_to_s3
-
-# Delegate TLS certificate verification to the OS's native trust store
-# (Windows: SChannel) instead of OpenSSL's own bundled one. Needed on
-# networks with TLS-inspecting proxies whose certificates the OS/browser
-# already trusts but Python's default ssl context does not. This is NOT
-# the same as disabling verification — verification still happens, just
-# against the same trust anchors the OS itself uses.
-truststore.inject_into_ssl()
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -83,10 +76,18 @@ def fetch_daily_prices(ticker: str, api_key: str) -> dict:
     }
     url = f"{ALPHA_VANTAGE_URL}?{urllib.parse.urlencode(params)}"
 
+    # Verify TLS certificates against the OS's native trust store (Windows:
+    # SChannel) instead of Python's bundled one. Needed on networks with
+    # TLS-inspecting proxies whose certificates the OS already trusts.
+    # Verification still happens, just against the OS's trust anchors.
+    # Scoped to this call on purpose: truststore.inject_into_ssl() would
+    # replace ssl.SSLContext globally and break boto3 (RecursionError).
+    ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
+            with urllib.request.urlopen(url, timeout=10, context=ssl_context) as response:
                 return json.loads(response.read().decode())
         except (urllib.error.URLError, TimeoutError) as exc:
             last_error = exc
