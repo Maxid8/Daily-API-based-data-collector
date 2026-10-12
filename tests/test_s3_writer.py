@@ -54,7 +54,7 @@ def test_upload_raw_to_s3_returns_false_on_botocore_error():
 
 def test_upload_raw_to_s3_raises_on_unexpected_exception():
     mock_client = MagicMock()
-    price_data = {"Time Series (Daily)": {(0,1)}}
+    price_data = {"Time Series (Daily)": {1,2}}
     test_date = datetime.date(2026, 3, 5)
 
     with patch("s3_writer.get_s3_client", return_value=mock_client):

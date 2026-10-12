@@ -1,8 +1,7 @@
 import json
-import time
 import urllib.error
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -142,6 +141,66 @@ def test_collect_proceeds_and_writes_data_when_under_daily_limit():
         mock_cur.executemany.assert_called_once()
 
 
+def test_collect_skips_s3_upload_in_fixture_mode():
+    with patch("API_call.get_connection") as mock_get_connection, \
+            patch("API_call.upload_raw_to_s3") as mock_upload:
+        mock_cur = (
+            mock_get_connection.return_value
+            .__enter__.return_value
+            .cursor.return_value
+            .__enter__.return_value
+        )
+        mock_cur.fetchone.return_value = (0,)
+
+        collect("IBM", {"API_KEY": "dummy"}, fixture_path=FIXTURES_DIR / "daily_series_success.json")
+
+    mock_upload.assert_not_called()
+
+
+def test_collect_uploads_raw_data_to_s3_in_live_mode():
+    price_data = load_fixture("daily_series_success.json")
+    config = {"API_KEY": "dummy", "S3_BUCKET_NAME": "test-bucket"}
+
+    with patch("API_call.get_connection") as mock_get_connection, \
+            patch("API_call.fetch_daily_prices", return_value=price_data), \
+            patch("API_call.upload_raw_to_s3") as mock_upload:
+        mock_cur = (
+            mock_get_connection.return_value
+            .__enter__.return_value
+            .cursor.return_value
+            .__enter__.return_value
+        )
+        mock_cur.fetchone.return_value = (0,)
+
+        collect("IBM", config)
+
+    mock_upload.assert_called_once_with(
+        bucket_name="test-bucket",
+        ticker="IBM",
+        today=ANY,
+        raw_json_data=price_data,
+    )
+
+
+def test_collect_skips_s3_upload_when_api_response_is_invalid():
+    error_response = load_fixture("invalid_api_key.json")
+    config = {"API_KEY": "dummy", "S3_BUCKET_NAME": "test-bucket"}
+
+    with patch("API_call.get_connection") as mock_get_connection, \
+            patch("API_call.fetch_daily_prices", return_value=error_response), \
+            patch("API_call.upload_raw_to_s3") as mock_upload:
+        mock_cur = (
+            mock_get_connection.return_value
+            .__enter__.return_value
+            .cursor.return_value
+            .__enter__.return_value
+        )
+        mock_cur.fetchone.return_value = (0,)
+
+        collect("IBM", config)
+
+    mock_upload.assert_not_called()
+
 def test_fetch_daily_prices_returns_parsed_json_on_success():
     with patch("urllib.request.urlopen") as mock_urlopen:
         mock_response = MagicMock()
@@ -154,7 +213,7 @@ def test_fetch_daily_prices_returns_parsed_json_on_success():
 
 
 def test_fetch_daily_prices_retries_after_network_error_then_succeeds():
-    with patch("urllib.request.urlopen") as mock_urlopen, patch("time.sleep") as mock_sleep:
+    with patch("urllib.request.urlopen") as mock_urlopen, patch("time.sleep"):
         mock_response = MagicMock()
         mock_response.read.return_value = b'{"Time Series (Daily)": {}}'
 
