@@ -23,6 +23,8 @@ REQUIRED_ENV_VARS = ["API_KEY", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", 
 DAILY_CALL_LIMIT = 25
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 
+# Explicit name instead of __name__: when this file is run as a script,
+# __name__ is "__main__", which would say nothing in the log.
 logger = logging.getLogger("daily_api_collector")
 
 
@@ -152,7 +154,12 @@ def write_api_data(cur: psycopg.Cursor, ticker: str, price_data: dict) -> int:
 
 def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = None) -> None:
     """One parameterized entry point (design doc 4.5), so a future scheduler
-    (cron / Airflow, project 6) can call this unchanged."""
+    (cron / Airflow, project 6) can call this unchanged.
+
+    Order matters: the Postgres upsert is committed first, then the raw
+    response is uploaded to S3 on a best-effort basis (a failed upload is
+    logged, not raised). In fixture mode the S3 upload is skipped, because a
+    saved fixture is not what the live API returned on that day."""
     today = dt.datetime.now(dt.timezone.utc).date()
 
     with get_connection(config) as conn:
@@ -195,7 +202,7 @@ def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = Non
                     raw_json_data=validation.result
                 )
             else:
-                logger.info("No data was uploaded to S3 because --fixture was used.")
+                logger.info("S3 upload skipped for %s: fixture mode (--fixture).", ticker)
 
 
 def parse_args() -> argparse.Namespace:

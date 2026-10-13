@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from botocore.exceptions import ClientError, BotoCoreError
 
-from s3_writer import upload_raw_to_s3
+from s3_writer import upload_raw_to_s3, build_raw_key
 
 
 def test_upload_raw_to_s3_puts_object_with_partitioned_key_and_returns_true():
@@ -60,3 +60,12 @@ def test_upload_raw_to_s3_raises_on_unexpected_exception():
     with patch("s3_writer.get_s3_client", return_value=mock_client):
         with pytest.raises(TypeError, match="not JSON serializable"):
             upload_raw_to_s3("s3_bucket", "IBM", test_date, price_data)
+
+
+def test_build_raw_key_returns_zero_padded_partitioned_key():
+    tested_day = datetime.date(2026, 3, 5)
+    ticker = "AAPL"
+
+    key = build_raw_key(ticker, tested_day)
+
+    assert key == "raw/year=2026/month=03/day=05/AAPL.json"

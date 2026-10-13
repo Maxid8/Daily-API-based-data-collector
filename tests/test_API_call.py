@@ -232,7 +232,7 @@ def test_fetch_daily_prices_retries_after_network_error_then_succeeds():
 
 
 def test_fetch_daily_prices_raises_after_exhausting_retries():
-    with patch("urllib.request.urlopen") as mock_urlopen, patch("time.sleep") as mock_sleep:
+    with patch("urllib.request.urlopen") as mock_urlopen, patch("time.sleep"):
         mock_urlopen.side_effect = urllib.error.URLError("network down")
 
         with pytest.raises(RuntimeError):
