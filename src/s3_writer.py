@@ -39,9 +39,12 @@ def build_raw_key(ticker: str, partition_date: datetime.date) -> str:
 
 def upload_raw_to_s3(bucket_name: str,
                      ticker: str,
-                     today: datetime.date,
+                     partition_date: datetime.date,
                      raw_json_data: dict) -> bool:
     """Upload the raw API response to the raw layer of the data lake.
+
+    partition_date is the run date (UTC), not a trading date: each run stores
+    the full response it received that day.
 
     Best-effort by design: S3 errors (ClientError, BotoCoreError) are logged
     and reported as False, because the Postgres load is already committed and
@@ -49,7 +52,7 @@ def upload_raw_to_s3(bucket_name: str,
     deliberately not caught. Transient network errors are retried by botocore
     before an exception reaches this function.
     """
-    key = build_raw_key(ticker, today)
+    key = build_raw_key(ticker, partition_date)
 
     try:
         client = get_s3_client()

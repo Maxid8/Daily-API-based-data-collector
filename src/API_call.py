@@ -1,6 +1,19 @@
+"""Daily stock price collector (Alpha Vantage -> PostgreSQL -> S3 raw layer).
+
+One run loads one ticker:
+  1. checks the daily API quota (25 calls/day, counted in the api_calls table),
+  2. fetches TIME_SERIES_DAILY from Alpha Vantage (or reads a saved fixture),
+  3. validates the response by its content,
+  4. upserts the prices into daily_prices and commits,
+  5. uploads the raw response to the S3 raw layer (best-effort, live mode only).
+
+Usage:
+    python src/API_call.py --ticker IBM [--fixture tests/fixtures/daily_series_success.json]
+"""
+
+import argparse
 import os
 import ssl
-import argparse
 import json
 import logging
 import time
@@ -29,12 +42,14 @@ logger = logging.getLogger("daily_api_collector")
 
 
 class ValidationResult(NamedTuple):
+    """Outcome of validate_response: either result or error is set, never both."""
     is_valid: bool
     result: dict | None
     error: dict | None
 
 
 def get_config() -> dict[str, str]:
+    """Load .env and return the required settings. Fail fast if any is missing or empty."""
     load_dotenv(PROJECT_ROOT / ".env")
     missing = [var for var in REQUIRED_ENV_VARS if not os.environ.get(var)]
     if missing:
@@ -46,6 +61,7 @@ def get_config() -> dict[str, str]:
 
 
 def get_connection(config: dict[str, str]) -> psycopg.Connection:
+    """Open a PostgreSQL connection from the loaded settings."""
     return psycopg.connect(
         dbname=config["DB_NAME"],
         user=config["DB_USER"],
@@ -69,7 +85,7 @@ def calls_made_today(cur: psycopg.Cursor) -> int:
 def fetch_daily_prices(ticker: str, api_key: str) -> dict:
     """Live call to Alpha Vantage. Network errors retry with backoff (design doc 4.4);
     a response that parses fine but signals quota/format trouble is NOT a network
-    error and is handled by validate_call instead."""
+    error and is handled by validate_response instead."""
     params = {
         "function": "TIME_SERIES_DAILY",
         "symbol": ticker,
@@ -102,16 +118,17 @@ def fetch_daily_prices(ticker: str, api_key: str) -> dict:
     raise RuntimeError(f"Alpha Vantage request failed after retries: {last_error}")
 
 
-def validate_call(call_result: dict) -> ValidationResult:
+def validate_response(response: dict) -> ValidationResult:
     """Success is judged by CONTENT (expected key present), not by the response
     merely being valid JSON — Alpha Vantage returns 200 + valid JSON even on a
     quota breach, just with a 'Note'/'Information' key instead."""
-    if "Time Series (Daily)" in call_result:
-        return ValidationResult(is_valid=True, result=call_result, error=None)
-    return ValidationResult(is_valid=False, result=None, error=call_result)
+    if "Time Series (Daily)" in response:
+        return ValidationResult(is_valid=True, result=response, error=None)
+    return ValidationResult(is_valid=False, result=None, error=response)
 
 
 def record_call(cur: psycopg.Cursor, ticker: str, is_valid: bool, error: dict | None) -> None:
+    """Log one API call in api_calls; the daily quota is counted from this table."""
     error_reason = None
     if error is not None:
         error_reason = error.get("Note") or error.get("Information") or json.dumps(error)[:500]
@@ -121,7 +138,12 @@ def record_call(cur: psycopg.Cursor, ticker: str, is_valid: bool, error: dict | 
     )
 
 
-def write_api_data(cur: psycopg.Cursor, ticker: str, price_data: dict) -> int:
+def upsert_daily_prices(cur: psycopg.Cursor, ticker: str, price_data: dict) -> int:
+    """Insert or update one row per trading day; return the number of rows sent.
+
+    ON CONFLICT on (ticker, trade_date) makes re-runs idempotent: the same day
+    loaded twice updates the row instead of duplicating it.
+    """
     series = price_data["Time Series (Daily)"]
     rows = [
         (
@@ -179,7 +201,7 @@ def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = Non
             else:
                 raw = fetch_daily_prices(ticker, config["API_KEY"])
 
-            validation = validate_call(raw)
+            validation = validate_response(raw)
             record_call(cur, ticker, validation.is_valid, validation.error)
 
             if validation.result is None:
@@ -190,7 +212,7 @@ def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = Non
                 conn.commit()
                 return
 
-            rows_written = write_api_data(cur, ticker, validation.result)
+            rows_written = upsert_daily_prices(cur, ticker, validation.result)
             conn.commit()
             logger.info("Upserted %d rows for %s.", rows_written, ticker)
 
@@ -198,28 +220,28 @@ def collect(ticker: str, config: dict[str, str], fixture_path: Path | None = Non
                 upload_raw_to_s3(
                     bucket_name=config["S3_BUCKET_NAME"],
                     ticker=ticker,
-                    today=today,
-                    raw_json_data=validation.result
+                    partition_date=today,
+                    raw_json_data=validation.result,
                 )
             else:
                 logger.info("S3 upload skipped for %s: fixture mode (--fixture).", ticker)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Daily API-based data collector (Alpha Vantage).")
-    parser.add_argument("--ticker", default="IBM", help="Stock ticker to fetch (default: IBM).")
+    parser = argparse.ArgumentParser(description="Collect daily stock prices from Alpha Vantage.")
+    parser.add_argument("--ticker", default="IBM", help="Stock ticker to collect (default: IBM).")
     parser.add_argument(
         "--fixture",
         type=Path,
         default=None,
-        help="Path to a saved API response JSON, used instead of a live call. "
-        "When used, no raw data is saved to S3. "
-        "(development/testing without burning API quota)",
+        help="Path to a saved API response JSON, used instead of a live call "
+        "(development without spending API quota). No raw data is uploaded to S3 in this mode.",
     )
     return parser.parse_args()
 
 
 def main() -> None:
+    """Command-line entry point."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

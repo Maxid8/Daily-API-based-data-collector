@@ -1,3 +1,9 @@
+"""Unit tests for API_call.py.
+
+PostgreSQL, the Alpha Vantage API and S3 are replaced by mocks, so the suite
+runs without a database, network access or API quota.
+"""
+
 import json
 import urllib.error
 from pathlib import Path
@@ -10,8 +16,8 @@ from API_call import (
     collect,
     fetch_daily_prices,
     record_call,
-    validate_call,
-    write_api_data,
+    upsert_daily_prices,
+    validate_response,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -22,20 +28,20 @@ def load_fixture(name: str) -> dict:
         return json.load(f)
 
 
-def test_validate_call_accepts_a_successful_response():
+def test_validate_response_accepts_a_successful_response():
     response = load_fixture("daily_series_success.json")
 
-    result = validate_call(response)
+    result = validate_response(response)
 
     assert result.is_valid is True
     assert result.result == response
     assert result.error is None
 
 
-def test_validate_call_rejects_an_invalid_api_key_response():
+def test_validate_response_rejects_an_invalid_api_key_response():
     response = load_fixture("invalid_api_key.json")
 
-    result = validate_call(response)
+    result = validate_response(response)
 
     assert result.is_valid is False
     assert result.result is None
@@ -66,7 +72,7 @@ def test_record_call_inserts_a_failed_call():
     )
 
 
-def test_write_api_data_builds_expected_rows_and_returns_row_count():
+def test_upsert_daily_prices_builds_expected_rows_and_returns_row_count():
     mock_cursor = MagicMock()
     price_data = {
         "Time Series (Daily)": {
@@ -87,7 +93,7 @@ def test_write_api_data_builds_expected_rows_and_returns_row_count():
         }
     }
 
-    rows_written = write_api_data(mock_cursor, "IBM", price_data)
+    rows_written = upsert_daily_prices(mock_cursor, "IBM", price_data)
 
     sql, rows = mock_cursor.executemany.call_args.args
 
@@ -101,7 +107,7 @@ def test_write_api_data_builds_expected_rows_and_returns_row_count():
     assert "ON CONFLICT (ticker, trade_date)" in sql
 
 
-def test_calls_made_today():
+def test_calls_made_today_returns_count_from_query():
     mock_cursor = MagicMock()
 
     mock_cursor.fetchone.return_value = (3,)
@@ -177,7 +183,7 @@ def test_collect_uploads_raw_data_to_s3_in_live_mode():
     mock_upload.assert_called_once_with(
         bucket_name="test-bucket",
         ticker="IBM",
-        today=ANY,
+        partition_date=ANY,
         raw_json_data=price_data,
     )
 
@@ -200,6 +206,7 @@ def test_collect_skips_s3_upload_when_api_response_is_invalid():
         collect("IBM", config)
 
     mock_upload.assert_not_called()
+
 
 def test_fetch_daily_prices_returns_parsed_json_on_success():
     with patch("urllib.request.urlopen") as mock_urlopen:

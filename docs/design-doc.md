@@ -1,8 +1,8 @@
 # Project 2 — Daily API-Based Data Collector
 ## Design Doc
 
-**Status:** design closed (including the call-counter and granularity questions), implementation in progress
-**Last updated:** 2026-09-14
+**Status:** implemented and tagged as `v0.2-api-collector`. Extended in project 3 with an S3 raw-layer upload, see [`data-lake-design.md`](data-lake-design.md).
+**Last updated:** 2026-10-14
 
 ---
 
@@ -24,7 +24,7 @@ Project 1 worked with a static CSV. This project practices the step where data a
 
 **Explicitly out of scope (left for later projects):**
 - Automatic scheduling (cron / Airflow) — that's the topic of project 6, but it's worth writing the script now so a scheduler can trivially call it later (see point 6)
-- Cloud storage (S3) — that's project 3
+- Cloud storage (S3) — that's project 3 (since implemented, see [`data-lake-design.md`](data-lake-design.md))
 - Fine-tuning scaling to multiple tickers/sources — if it comes up, note it in the "Future extension points" section, but it doesn't block the current project
 
 ## 3. Architecture Overview
@@ -136,9 +136,24 @@ The script is designed to have a single, parameterizable entry point (e.g. date 
 
 ## 9. Future Extension Points
 
-- Project 3: the same data also lands in S3, partitioned — the current client's output (validated, cleaned records) will be reusable as a parallel target.
+- Project 3 (done): the raw API response also lands in S3, partitioned by run date. See [`data-lake-design.md`](data-lake-design.md).
 - Project 6: this script becomes one task in the Airflow DAG.
 
-## 10. Lessons Learned
+## 10. Implementation Notes
 
-*(to be filled in at the end of the project: what worked, what would be done differently)*
+The code follows this design. A few names changed during implementation, and one planned helper was folded into its caller:
+
+| Design | Implementation (`src/API_call.py`) |
+|---|---|
+| `call_alpha_vantage` | `fetch_daily_prices` (urllib, 10 s timeout, 3 attempts with exponential backoff) |
+| `daily_calls` | `calls_made_today` |
+| `is_callable` (pure helper) | not a separate function: the limit check is a single comparison in `collect()` |
+| `write_api_data` | `upsert_daily_prices` |
+| `validate_call` | `validate_response` |
+
+## 11. Lessons Learned
+
+- The API integration and the database insertion came together faster than expected.
+- The harder part was the function structure: deciding how functions depend on and call each other, so that each has a single, clear responsibility.
+- Next time more time goes into the design phase: listing every piece the pipeline needs and how they connect before writing code, instead of discovering the structure while coding.
+- Upsert semantics and transactions were new. The reasoning is clear now, but they need more practice.
