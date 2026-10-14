@@ -3,7 +3,7 @@
 
 **Status:** implemented, to be tagged as `v0.3-data-lake`
 **Builds on:** project 2, the daily collector ([`design-doc.md`](design-doc.md))
-**Last updated:** 2026-10-14
+**Last updated:** 2026-10-14 (IAM policy renamed)
 
 ---
 
@@ -74,7 +74,7 @@ raw/year=2026/month=10/day=12/IBM.json
 
 ### 4.3 Access: IAM
 
-A dedicated IAM user, `daily-prices-collector`, with one customer-managed policy:
+A dedicated IAM user, `daily-prices-collector`, with one customer-managed policy, `DailyPricesRawAccessPolicy`:
 
 ```json
 {
@@ -100,6 +100,7 @@ A dedicated IAM user, `daily-prices-collector`, with one customer-managed policy
 - **`ListBucket` is a bucket-level action**, so it needs the bucket ARN, not the object ARN. The `Condition` limits it to the `raw/` prefix.
 - **Why listing is needed at all:** without `s3:ListBucket`, S3 answers a request for a missing object with `AccessDenied` (403) instead of `NoSuchKey` (404), to avoid revealing which objects exist. The verifier needs the difference between "missing" and "no permission". This was confirmed with a test request after the policy change.
 - **The `processed/` prefix is not accessible** to this user. Project 4 gets its own permissions.
+- **The policy was renamed after the first release.** It was originally called `DailyPricesRawWritePolicy`, which was misleading because it also allows reading and listing. A managed policy cannot be renamed, so a new one was created, attached, tested, and the old one deleted.
 
 ### 4.4 Upload — `src/s3_writer.py`
 
@@ -175,7 +176,6 @@ The key format and the content of the raw layer are a promise to every reader, n
 
 - *Accepted:* the `AWS_CA_BUNDLE` file is a copy of botocore's CA list. After a boto3 upgrade it should be rebuilt.
 - *Accepted:* one ticker per run. Multiple tickers would need a loop or one scheduled task per ticker (project 6).
-- *Open:* the policy is named `DailyPricesRawWritePolicy`, but it also allows reading and listing. A more accurate name would be clearer.
 - *Open:* the AWS resources are created by hand. Project 8 moves them to Terraform.
 
 ## 10. Lessons Learned
